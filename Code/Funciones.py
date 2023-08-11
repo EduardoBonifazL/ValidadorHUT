@@ -3,7 +3,13 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions
+from selenium.common.exceptions import TimeoutException
+from pyhocon import ConfigFactory
+# from pyhocon.exceptions import ConfigMissingException
+from Code.Constantes import \
+    UserViewXpath, UserStatusXpath, FolderClosedXpath, FileXpath, FileSegmentXpath, FileSourceXpath, FileBodyXpath
 import os
+import re
 
 
 def init_driver():
@@ -22,7 +28,7 @@ def get_value(driver, xpath: str, t=1):
     try:
         WebDriverWait(driver, t).until(expected_conditions.presence_of_element_located((By.XPATH, xpath)))
         return driver.find_element(By.XPATH, xpath).text
-    except:
+    except TimeoutException:
         return
 
 
@@ -34,7 +40,7 @@ def get_list(driver, xpath: str, t=1, text=True):
             return list(map(lambda x: x.text, xpath_list))
         else:
             return xpath_list
-    except:
+    except TimeoutException:
         return
 
 
@@ -42,7 +48,7 @@ def get_attribute(driver, xpath: str, attribute: str, t=1):
     try:
         WebDriverWait(driver, t).until(expected_conditions.presence_of_element_located((By.XPATH, xpath)))
         return driver.find_element(By.XPATH, xpath).get_attribute(attribute)
-    except:
+    except TimeoutException:
         return
 
 
@@ -50,7 +56,7 @@ def get_value_link(driver, xpath: str, t=1):
     try:
         WebDriverWait(driver, t).until(expected_conditions.presence_of_element_located((By.XPATH, xpath)))
         return [get_value(driver, xpath, 1), get_attribute(driver, xpath, "href")]
-    except:
+    except TimeoutException:
         return
 
 
@@ -68,7 +74,7 @@ def get_sub_task(driver, t=1):
                  row.find_element(By.XPATH, 'td[@class="assignee"]').text]
             )
         return sub_task
-    except:
+    except TimeoutException:
         return
 
 
@@ -87,20 +93,13 @@ def get_child_item(driver, t=1):
                  row.find_element(By.XPATH, 'ul/li[@class="status"]').text]
             )
         return child_item
-    except:
+    except TimeoutException:
         return
 
 
 def get_user_approved(driver, t=1):
-    usuarios = get_list(
-        driver,
-        '//div[@class="activity-item approved-activity" or @class="activity-item unapproved-activity" or @class="activity-item reviewed-activity"]//span[@class="user-name"]',
-        t
-    )
-    estados = get_list(
-        driver,
-        '//div[@class="activity-item approved-activity" or @class="activity-item unapproved-activity" or @class="activity-item reviewed-activity"]//span[@class="lozenge-wrapper"]',
-    )
+    usuarios = get_list(driver, UserViewXpath, t)
+    estados = get_list(driver, UserStatusXpath)
     user_reviewers = dict()
     if (usuarios is not None) and (estados is not None):
         for usuario, estado in zip(reversed(usuarios), reversed(estados)):
@@ -115,26 +114,26 @@ def get_user_approved(driver, t=1):
 
 def get_files(driver, t=1):
     path_file = dict()
-    folder_closed = get_list(driver, '//span[@class="aui-icon aui-icon-small icon-folder-closed directory-icon"]', t, False)
+    folder_closed = get_list(driver, FolderClosedXpath, t, False)
     while folder_closed is not None:
         for folder in folder_closed:
             folder.click()
-        folder_closed = get_list(driver, '//span[@class="aui-icon aui-icon-small icon-folder-closed directory-icon"]', text=False)
-    file_list = get_list(driver, '//a[span[@class="aui-icon aui-icon-small icon-file-added status-icon" or @class="aui-icon aui-icon-small icon-file-moved status-icon" or @class="aui-icon aui-icon-small icon-file-modified status-icon" or @class="aui-icon aui-icon-small icon-file-copied status-icon"]]', text=False)
+        folder_closed = get_list(driver, FolderClosedXpath, text=False)
+    file_list = get_list(driver, FileXpath, text=False)
     file_link = []
     for file in file_list:
         name = file.text
         for i in ['.conf', '.json', '.schema', '.feature', '.scala']:
             if i in name:
                 file.click()
-                file_segment = get_value(driver, '//span[@class="file-breadcrumbs-segment-highlighted"]')
+                file_segment = get_value(driver, FileSegmentXpath)
                 while name != file_segment:
-                    file_segment = get_value(driver, '//span[@class="file-breadcrumbs-segment-highlighted"]')
-                file_link.append(get_attribute(driver, '//a[@aria-label="View the entire source for this file"]', 'href').replace('/browse/', '/raw/'))
+                    file_segment = get_value(driver, FileSegmentXpath)
+                file_link.append(get_attribute(driver, FileSourceXpath, 'href').replace('/browse/', '/raw/'))
     for link in file_link:
         driver.get(link)
         path = link.split('?at=')[0]
-        path_file[path] = get_value(driver, '/html/body/pre', 4)
+        path_file[path] = get_value(driver, FileBodyXpath, 4)
     return path_file
 
 
@@ -182,14 +181,14 @@ def valid_type(type_hut, type_hut_value: str):
     print(f'* {comentario}: {estado}')
 
 
-def valid_acceptance_criteria(acceptance_criteria, acceptance_criteria_value: str):
+def valid_acceptance_criteria(accept_crit, accept_crit_value: str):
     estado = "FAILURE"
-    if acceptance_criteria is not None:
-        if acceptance_criteria == acceptance_criteria_value:
-            comentario = f'Criterio de Aceptación "{acceptance_criteria}"'
+    if accept_crit is not None:
+        if accept_crit == accept_crit_value:
+            comentario = f'Criterio de Aceptación "{accept_crit}"'
             estado = "OK"
         else:
-            comentario = f'Se encontró Criterio de Aceptación "{acceptance_criteria}", se esperaba "{acceptance_criteria_value}"'
+            comentario = f'Se encontró Criterio de Aceptación "{accept_crit}", se esperaba "{accept_crit_value}"'
         print(f'* {comentario}: {estado}')
     else:
         print(f'* No se encontró Criterio de Aceptación: {estado}')
@@ -264,6 +263,58 @@ def valid_sub_tasks(sub_tasks: list, tarea, status, asignado_text, asignado):
         print(f'* Se esperaba documento {tarea}: {estado}')
 
 
+def valid_pull_request(pull_request: list):
+    estado = "FAILURE"
+    if pull_request is not None:
+        if pull_request[0] == "1 pull request":
+            estado = "OK"
+    print(f'* HUT asociada a una sola Pull Request: {estado}')
+
+
+def valid_dependency(child_item: list, feature_link: list, status):
+    estado = "FAILURE"
+    comentario = "No se encontró Dependencia asignada"
+    if child_item is not None:
+        for child in child_item:
+            if child[3] == status:
+                estado = "OK"
+                comentario = f'HUT asignada a Dependencia {child[0]} y estado {child[3]}'
+            else:
+                estado = "FAILURE"
+                comentario = f'HUT asignada a Dependencia {child[0]} y estado {child[3]} se esperaba {status}'
+            print(f'* {comentario}: {estado}')
+            if feature_link is not None:
+                if child[4] == feature_link:
+                    estado = "OK"
+                    comentario = f'Feature Link de HUT y Dependencia {child[0]} son iguales'
+                else:
+                    estado = "FAILURE"
+                    comentario = f'Feature Link de HUT y Dependencia {child[0]} no son iguales'
+                print(f'* {comentario}: {estado}')
+    else:
+        print(f'* {comentario}: {estado}')
+
+
+def set_variables(file):
+    list_var = list(set(re.findall(r"(?<=\$\{)[?A-Z0-9_]+(?=})", file)))
+    for var in list_var:
+        if '?' in var:
+            var = var.replace('?', '')
+            os.environ[var] = '"${?'+var+'}"'
+        else:
+            os.environ[var] = '"${'+var+'}"'
+
+
+def valid_conf_hammurabi(files):
+    if files is not None:
+        for key, value in files.items():
+            if ".conf" in key:
+                set_variables(value)
+                conf = ConfigFactory.parse_string(value)
+                # value = conf.get_string("data")
+                print(conf)
+
+
 def ingesta(clase):
     valid_type(clase.Type, "Story")
     valid_label(clase.Labels, ['ReleasePRDatio'])
@@ -272,7 +323,10 @@ def ingesta(clase):
     valid_item_type(clase.ItemType, "Technical")
     valid_tech_stack(clase.TechStack, "Data - Dataproc")
     valid_sub_tasks(clase.SubTask, "[C204][QA]", "READY", "sin asignar", "Unassigned")
-    valid_sub_tasks(clase.SubTask, "[C204][PO]", "ACCEPTED", "asignado a PO", "")  # Falta implementar verificación de PO
+    valid_sub_tasks(clase.SubTask, "[C204][PO]", "ACCEPTED", "asignado a PO", "")  # Falta implementar verificación PO
+    valid_pull_request(clase.PullRequest)
+    valid_dependency(clase.ChildItem, clase.FeatureLink, "IN PROGRESS")
+    valid_conf_hammurabi(clase.Files)
 
 
 def hammurabi(clase):
@@ -283,7 +337,9 @@ def hammurabi(clase):
     valid_item_type(clase.ItemType, "Technical")
     valid_tech_stack(clase.TechStack, "Data - Dataproc")
     valid_sub_tasks(clase.SubTask, "[C204][QA]", "READY", "sin asignar", "Unassigned")
-    valid_sub_tasks(clase.SubTask, "[C204][PO]", "ACCEPTED", "asignado a PO", "")  # Falta implementar verificación de PO
+    valid_sub_tasks(clase.SubTask, "[C204][PO]", "ACCEPTED", "asignado a PO", "")  # Falta implementar verificación PO
+    valid_pull_request(clase.PullRequest)
+    valid_dependency(clase.ChildItem, clase.FeatureLink, "IN PROGRESS")
 
 
 def malla(clase):
@@ -293,8 +349,10 @@ def malla(clase):
     valid_item_type(clase.ItemType, "Technical")
     valid_tech_stack(clase.TechStack, "Data - Dataproc")
     valid_sub_tasks(clase.SubTask, "[C204][QA]", "READY", "sin asignar", "Unassigned")
-    valid_sub_tasks(clase.SubTask, "[C204][PO]", "ACCEPTED", "asignado a PO", "")  # Falta implementar verificación de PO
-    valid_sub_tasks(clase.SubTask, "[P110][AT]", "ACCEPTED", "asignado a SM", "")  # Falta implementar verificación de SM
+    valid_sub_tasks(clase.SubTask, "[C204][PO]", "ACCEPTED", "asignado a PO", "")  # Falta implementar verificación PO
+    valid_sub_tasks(clase.SubTask, "[P110][AT]", "ACCEPTED", "asignado a SM", "")  # Falta implementar verificación SM
+    valid_pull_request(clase.PullRequest)
+    valid_dependency(clase.ChildItem, clase.FeatureLink, "IN PROGRESS")
 
 
 def validador(clase):
@@ -307,4 +365,3 @@ def validador(clase):
             hammurabi(clase)
         elif tipo_hut == "Control M":
             malla(clase)
-
