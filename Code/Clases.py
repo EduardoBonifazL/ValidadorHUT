@@ -14,18 +14,36 @@ class ValidHut:
         self.AcceptanceCriteria = get_value(self.Driver, AcceptanceCriteriaXpath)
         self.ItemType = get_value(self.Driver, ItemTypeXpath)
         self.TechStack = get_value(self.Driver, TechStackXpath)
+        self.TeamBacklog = get_value(self.Driver, TeamBacklogXpath)
         self.Attachments = get_list(self.Driver, AttachmentsXpath)
         self.Labels = get_list(self.Driver, LabelsXpath)
         self.FeatureLink = get_value_link(self.Driver, FeatureLinkXpath)
         self.PullRequest = get_value_link(self.Driver, PullRequestXpath)
         self.SubTask = get_sub_task(self.Driver)
         self.ChildItem = get_child_item(self.Driver)
+        self.TeamBacklogCreated = self.get_team_backlog_history()
+        self.PO = get_po(self.TeamBacklogCreated)
         self.LatestBuildStatus = None
         self.LatestBuildTime = None
         self.UserApproved = None
         self.Files = None
+        self.FeatureProgram = self.get_feature_program()
         self.get_dependency()
         self.get_data_pr()
+
+    def get_team_backlog_history(self):
+        team_backlog_list = expand_history(self.Driver)
+        if team_backlog_list is not None:
+            return get_first_team(team_backlog_list)
+        else:
+            return self.TeamBacklog
+
+    def get_feature_program(self):
+        if self.FeatureLink is not None:
+            self.Driver.get(self.FeatureLink[1])
+            return [get_list(self.Driver, ProgramIncrementXpath, 2), get_value(self.Driver, StatusXpath)]
+        else:
+            return
 
     def get_dependency(self):
         if self.ChildItem is not None:

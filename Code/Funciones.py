@@ -7,7 +7,9 @@ from selenium.common.exceptions import TimeoutException
 from pyhocon import ConfigFactory
 # from pyhocon.exceptions import ConfigMissingException
 from Code.Constantes import \
-    UserViewXpath, UserStatusXpath, FolderClosedXpath, FileXpath, FileSegmentXpath, FileSourceXpath, FileBodyXpath
+    UserViewXpath, UserStatusXpath, FolderClosedXpath, FileXpath, FileSegmentXpath, FileSourceXpath, FileBodyXpath,\
+    TeamBacklogHistoryXpath
+import pandas as pd
 import os
 import re
 
@@ -60,6 +62,24 @@ def get_value_link(driver, xpath: str, t=1):
         return
 
 
+def get_po(team_backlog):
+    lideres_df = pd.read_excel(
+        './Resource/[DQA] Lideres Datio - Acuerdos EdP.xlsx',
+        sheet_name=os.environ["Q"],
+        dtype='object'
+    ).dropna(subset='Dom')
+    for index, data in lideres_df.iterrows():
+        if type(data['Tablero']) == str and team_backlog in data['Tablero']:
+            if type(data['PO']) == str:
+                po_list = [transform_assigned(x) for x in data['PO'].replace('@bbva.com', '').split('\n')]
+                if type(data['PO Temporal']) == str:
+                    po_list.extend(
+                        [transform_assigned(x) for x in data['PO Temporal'].replace('@bbva.com', '').split('\n')])
+                return list(set(po_list))
+            break
+    return
+
+
 def get_sub_task(driver, t=1):
     try:
         WebDriverWait(driver, t).until(expected_conditions.presence_of_element_located((
@@ -71,7 +91,7 @@ def get_sub_task(driver, t=1):
                 [row.find_element(By.XPATH, 'td[@class="stsummary"]').text,
                  get_attribute(row, 'td[@class="stsummary"]/a', "href"),
                  row.find_element(By.XPATH, 'td[@class="status"]').text,
-                 row.find_element(By.XPATH, 'td[@class="assignee"]').text]
+                 transform_assigned(row.find_element(By.XPATH, 'td[@class="assignee"]').text)]
             )
         return sub_task
     except TimeoutException:
@@ -95,6 +115,22 @@ def get_child_item(driver, t=1):
         return child_item
     except TimeoutException:
         return
+
+
+def expand_history(driver, t=1):
+    expanded = get_attribute(driver, '//*[@id="activitymodule_heading"]/button', "aria-expanded", t)
+    while expanded != "true":
+        driver.find_element(By.XPATH, '//*[@id="activitymodule_heading"]/button').click()
+        expanded = get_attribute(driver, '//*[@id="activitymodule_heading"]/button', "aria-expanded", 2)
+    active_tab = get_value(driver, '//*[@class="menu-item  active-tab active "]')
+    while active_tab != "History":
+        driver.find_element(By.XPATH, '//*[@data-id="changehistory-tabpanel"]').click()
+        active_tab = get_value(driver, '//*[@class="menu-item  active-tab active "]', 2)
+    return get_list(driver, TeamBacklogHistoryXpath, 2)
+
+
+def get_first_team(team_list):
+    return re.findall(r"(?<=>)[\w\s.&-]+(?=</span>)", team_list[0])[0]
 
 
 def get_user_approved(driver, t=1):
@@ -135,6 +171,12 @@ def get_files(driver, t=1):
         path = link.split('?at=')[0]
         path_file[path] = get_value(driver, FileBodyXpath, 4)
     return path_file
+
+
+def transform_assigned(assigned):
+    assignee_text = assigned.split('.')
+    assignee = assignee_text[:-1] if assignee_text[-1] == 'contractor' else assignee_text
+    return ' '.join(assignee).upper()
 
 
 # Funciones de Validación:
@@ -204,6 +246,16 @@ def valid_status(status, status_value: str):
     print(f'* {comentario}: {estado}')
 
 
+def valid_team_qa(team_backlog):
+    estado = "FAILURE"
+    if team_backlog == 'Peru - PE Data Quality':
+        comentario = f'HUT asignada a tablero "Peru - PE Data Quality"'
+        estado = "OK"
+    else:
+        comentario = f'Aun no ha sido asignada a tablero "Peru - PE Data Quality"'
+    print(f'* {comentario}: {estado}')
+
+
 def valid_item_type(item_type, item_type_value: str):
     estado = "FAILURE"
     if item_type == item_type_value:
@@ -224,6 +276,28 @@ def valid_tech_stack(tech_stack, tech_stack_value: str):
     print(f'* {comentario}: {estado}')
 
 
+def valid_feature(feature_program):
+    estado = "FAILURE"
+    comentario = "No se encontró Feature asignado"
+    if feature_program is not None:
+        if feature_program[1] == "IN PROGRESS":
+            comentario = f'Feature en estado "IN PROGRESS"'
+            estado = "OK"
+        else:
+            estado = "FAILURE"
+            comentario = f'Se encontró Feature en estado "{feature_program[1]}", se esperaba "IN PROGRESS"'
+        print(f'* {comentario}: {estado}')
+        q = os.environ["Q"].split('-')[0]
+        estado = "WARNING"
+        comentario = f'No se encontró vigencia del Feature en "{q}"'
+        for program in feature_program[0]:
+            if q in program:
+                estado = "OK"
+                comentario = f'Feature vigente del "{q}"'
+                break
+    print(f'* {comentario}: {estado}')
+
+
 def valid_label(labels: list, label_list: list):
     estado = "FAILURE"
     if labels is not None:
@@ -239,7 +313,18 @@ def valid_label(labels: list, label_list: list):
         print(f'* Se esperaba labels {label_list}: {estado}')
 
 
-def valid_sub_tasks(sub_tasks: list, tarea, status, asignado_text, asignado):
+def contains_elements(sublista, lista):
+    for elemento in sublista:
+        if elemento not in lista:
+            return False
+    return True
+
+
+def contains_name(sublista, lista):
+    return contains_elements(sublista, lista) or contains_elements(lista, sublista)
+
+
+def valid_sub_tasks(sub_tasks: list, tarea, status, asignado_text, asignado_list: list):
     estado = "FAILURE"
     if sub_tasks is not None:
         for sub_task in sub_tasks:
@@ -251,24 +336,44 @@ def valid_sub_tasks(sub_tasks: list, tarea, status, asignado_text, asignado):
                     comentario = f'Subtarea {tarea} {sub_task[2]} se esperaba {status}'
                     estado = "FAILURE"
                 print(f'* {comentario}: {estado}')
-                if asignado == sub_task[3]:
-                    comentario = f'Subtarea {tarea} {asignado_text}'
-                    estado = "OK"
+                if asignado_list is not None:
+                    find = False
+                    for asignado in asignado_list:
+                        if contains_name(asignado.lower().split(' '), sub_task[3].lower().split(' ')):
+                            comentario = f'Subtarea {tarea} {asignado_text}'
+                            estado = "OK"
+                            find = True
+                            break
+                    if not find:
+                        comentario = f'Subtarea {tarea} asignado {sub_task[3]} se esperaba {asignado_list}'
+                        estado = "FAILURE"
                 else:
-                    comentario = f'Subtarea {tarea} asignado {sub_task[3]} se esperaba {asignado}'
-                    estado = "FAILURE"
+                    comentario = 'No se encontró PO para el Team Backlog de creación revisar "Lideres Datio"'
+                    estado = "WARNING"
                 print(f'* {comentario}: {estado}')
                 break
     else:
         print(f'* Se esperaba documento {tarea}: {estado}')
 
 
+def valid_team_backlog_created(team_backlog_created, team_value):
+    estado = "FAILURE"
+    if team_backlog_created != team_value:
+        estado = "OK"
+        comentario = f'La HUT fue creada en tablero "{team_backlog_created}"'
+    else:
+        comentario = f'La HUT a sido creada o clonada desde tablero de QA'
+    print(f'* {comentario}: {estado}')
+
+
 def valid_pull_request(pull_request: list):
     estado = "FAILURE"
+    comentario = 'No se encontró Pull Request asociada'
     if pull_request is not None:
         if pull_request[0] == "1 pull request":
             estado = "OK"
-    print(f'* HUT asociada a una sola Pull Request: {estado}')
+            comentario = 'HUT asociada a una sola Pull Request'
+    print(f'* {comentario}: {estado}')
 
 
 def valid_dependency(child_item: list, feature_link: list, status):
@@ -295,6 +400,21 @@ def valid_dependency(child_item: list, feature_link: list, status):
         print(f'* {comentario}: {estado}')
 
 
+def valid_build_passed(pull_request, latest_build_status):
+    if pull_request is not None:
+        estado = "FAILURE"
+        comentario = f'No se encontró Build'
+        if latest_build_status is not None:
+            if latest_build_status == 'Passed':
+                estado = "OK"
+                comentario = f'Se encontró el ultimo build en estado {latest_build_status}'
+            else:
+                estado = "FAILURE"
+                comentario = f'Se encontró el ultimo build en estado {latest_build_status}, se esperaba Passed'
+
+        print(f'* {comentario}: {estado}')
+
+
 def set_variables(file):
     list_var = list(set(re.findall(r"(?<=\$\{)[?A-Z0-9_]+(?=})", file)))
     for var in list_var:
@@ -317,29 +437,53 @@ def valid_conf_hammurabi(files):
 
 def ingesta(clase):
     valid_type(clase.Type, "Story")
+    valid_team_qa(clase.TeamBacklog)
     valid_label(clase.Labels, ['ReleasePRDatio'])
+    valid_feature(clase.FeatureProgram)
     valid_acceptance_criteria(clase.AcceptanceCriteria, "Desarrollo según los Lineamientos del Equipo de DQA.")
+    valid_team_backlog_created(clase.TeamBacklogCreated, 'Peru - PE Data Quality')
     valid_status(clase.Status, "READY")
     valid_item_type(clase.ItemType, "Technical")
     valid_tech_stack(clase.TechStack, "Data - Dataproc")
-    valid_sub_tasks(clase.SubTask, "[C204][QA]", "READY", "sin asignar", "Unassigned")
-    valid_sub_tasks(clase.SubTask, "[C204][PO]", "ACCEPTED", "asignado a PO", "")  # Falta implementar verificación PO
+    valid_sub_tasks(clase.SubTask, "[C204][PO]", "ACCEPTED", "asignado a PO", clase.PO)
+    valid_sub_tasks(clase.SubTask, "[C204][QA]", "READY", "sin asignar", ["Unassigned"])
     valid_pull_request(clase.PullRequest)
     valid_dependency(clase.ChildItem, clase.FeatureLink, "IN PROGRESS")
-    valid_conf_hammurabi(clase.Files)
+    valid_build_passed(clase.PullRequest, clase.LatestBuildStatus)
 
 
 def hammurabi(clase):
     valid_type(clase.Type, "Story")
+    valid_team_qa(clase.TeamBacklog)
     valid_label(clase.Labels, ['ReleasePRDatio'])
+    valid_feature(clase.FeatureProgram)
     valid_acceptance_criteria(clase.AcceptanceCriteria, "Desarrollo según los Lineamientos del Equipo de DQA.")
+    valid_team_backlog_created(clase.TeamBacklogCreated, 'Peru - PE Data Quality')
     valid_status(clase.Status, "READY")
     valid_item_type(clase.ItemType, "Technical")
     valid_tech_stack(clase.TechStack, "Data - Dataproc")
-    valid_sub_tasks(clase.SubTask, "[C204][QA]", "READY", "sin asignar", "Unassigned")
-    valid_sub_tasks(clase.SubTask, "[C204][PO]", "ACCEPTED", "asignado a PO", "")  # Falta implementar verificación PO
+    valid_sub_tasks(clase.SubTask, "[C204][PO]", "ACCEPTED", "asignado a PO", clase.PO)
+    valid_sub_tasks(clase.SubTask, "[C204][QA]", "READY", "sin asignar", ["Unassigned"])
     valid_pull_request(clase.PullRequest)
     valid_dependency(clase.ChildItem, clase.FeatureLink, "IN PROGRESS")
+    valid_build_passed(clase.PullRequest, clase.LatestBuildStatus)
+    valid_conf_hammurabi(clase.Files)
+
+
+def procesamiento(clase):
+    valid_type(clase.Type, "Story")
+    valid_team_qa(clase.TeamBacklog)
+    valid_label(clase.Labels, ['ReleasePRDatio'])
+    valid_feature(clase.FeatureProgram)
+    valid_acceptance_criteria(clase.AcceptanceCriteria, "Desarrollo según los Lineamientos del Equipo de DQA.")
+    valid_team_backlog_created(clase.TeamBacklogCreated, 'Peru - PE Data Quality')
+    valid_status(clase.Status, "READY")
+    valid_tech_stack(clase.TechStack, "Data - Dataproc")
+    valid_sub_tasks(clase.SubTask, "[C204][PO]", "ACCEPTED", "asignado a PO", clase.PO)
+    valid_sub_tasks(clase.SubTask, "[C204][QA]", "READY", "sin asignar", ["Unassigned"])
+    valid_pull_request(clase.PullRequest)
+    valid_dependency(clase.ChildItem, clase.FeatureLink, "IN PROGRESS")
+    valid_build_passed(clase.PullRequest, clase.LatestBuildStatus)
 
 
 def malla(clase):
@@ -348,9 +492,9 @@ def malla(clase):
     valid_status(clase.Status, "READY")
     valid_item_type(clase.ItemType, "Technical")
     valid_tech_stack(clase.TechStack, "Data - Dataproc")
-    valid_sub_tasks(clase.SubTask, "[C204][QA]", "READY", "sin asignar", "Unassigned")
-    valid_sub_tasks(clase.SubTask, "[C204][PO]", "ACCEPTED", "asignado a PO", "")  # Falta implementar verificación PO
-    valid_sub_tasks(clase.SubTask, "[P110][AT]", "ACCEPTED", "asignado a SM", "")  # Falta implementar verificación SM
+    valid_sub_tasks(clase.SubTask, "[C204][PO]", "ACCEPTED", "asignado a PO", clase.PO)
+    valid_sub_tasks(clase.SubTask, "[P110][AT]", "ACCEPTED", "asignado a SM", [""])  # Falta implementar verificación SM
+    valid_sub_tasks(clase.SubTask, "[C204][QA]", "READY", "sin asignar", ["Unassigned"])
     valid_pull_request(clase.PullRequest)
     valid_dependency(clase.ChildItem, clase.FeatureLink, "IN PROGRESS")
 
@@ -363,5 +507,7 @@ def validador(clase):
             ingesta(clase)
         elif tipo_hut == "hammurabi":
             hammurabi(clase)
+        elif tipo_hut == "procesamiento":
+            procesamiento(clase)
         elif tipo_hut == "Control M":
             malla(clase)
