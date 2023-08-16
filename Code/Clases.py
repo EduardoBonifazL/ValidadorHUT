@@ -1,4 +1,5 @@
-from Code.Funciones import *
+from Code.Funciones import get_value, get_list, get_value_link, get_sub_task, get_child_item, get_po, get_sm, \
+    expand_history, get_first_team, get_attribute, get_user_approved, get_files
 from Code.Constantes import *
 
 
@@ -23,10 +24,12 @@ class ValidHut:
         self.ChildItem = get_child_item(self.Driver)
         self.TeamBacklogCreated = self.get_team_backlog_history()
         self.PO = get_po(self.TeamBacklogCreated)
+        self.SM = get_sm(self.TeamBacklogCreated)
         self.LatestBuildStatus = None
         self.LatestBuildTime = None
         self.UserApproved = None
         self.Files = None
+        self.PRLink = None
         self.FeatureProgram = self.get_feature_program()
         self.get_dependency()
         self.get_data_pr()
@@ -50,17 +53,18 @@ class ValidHut:
             feature_list = []
             for Child in self.ChildItem:
                 self.Driver.get(Child[1])
-                feature_list.append(get_value_link(self.Driver, FeatureLinkXpath, 5))
-            self.ChildItem = [child + [feature] for child, feature in zip(self.ChildItem, feature_list)]
+                feature_list.append(
+                    [get_value_link(self.Driver, FeatureLinkXpath, 5), get_value(self.Driver, TypeXpath)])
+            self.ChildItem = [child + feature for child, feature in zip(self.ChildItem, feature_list)]
 
     def get_data_pr(self):
         if self.PullRequest is not None:
             self.Driver.get(self.PullRequest[1])
-            pr_link = get_attribute(self.Driver, PRLinkXpath, "href", 5)
-            self.Driver.get(pr_link+"/overview")
+            self.PRLink = get_attribute(self.Driver, PRLinkXpath, "href", 5)
+            self.Driver.get(self.PRLink+"/overview")
             self.UserApproved = get_user_approved(self.Driver, 5)
-            self.Driver.get(pr_link+"/diff")
+            self.Driver.get(self.PRLink+"/diff")
             self.Files = get_files(self.Driver, 4)
-            self.Driver.get(pr_link+"/builds")
+            self.Driver.get(self.PRLink+"/builds")
             self.LatestBuildStatus = get_value(self.Driver, LatestBuildStatusXpath, 4)
             self.LatestBuildTime = get_attribute(self.Driver, LatestBuildTimeXpath, "datetime")

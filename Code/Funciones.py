@@ -4,8 +4,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions
 from selenium.common.exceptions import TimeoutException
-from pyhocon import ConfigFactory
-# from pyhocon.exceptions import ConfigMissingException
+from Code.ClasesConf import KirbyConf, HammurabiConf
 from Code.Constantes import \
     UserViewXpath, UserStatusXpath, FolderClosedXpath, FileXpath, FileSegmentXpath, FileSourceXpath, FileBodyXpath,\
     TeamBacklogHistoryXpath
@@ -71,11 +70,30 @@ def get_po(team_backlog):
     for index, data in lideres_df.iterrows():
         if type(data['Tablero']) == str and team_backlog in data['Tablero']:
             if type(data['PO']) == str:
-                po_list = [transform_assigned(x) for x in data['PO'].replace('@bbva.com', '').split('\n')]
+                po_list = [transform_assigned(x) for x in transform_replace(data['PO'])]
                 if type(data['PO Temporal']) == str:
                     po_list.extend(
-                        [transform_assigned(x) for x in data['PO Temporal'].replace('@bbva.com', '').split('\n')])
+                        [transform_assigned(x) for x in transform_replace(data['PO Temporal'])])
                 return list(set(po_list))
+            break
+    return
+
+
+def get_sm(team_backlog):
+    lideres_df = pd.read_excel(
+        './Resource/[DQA] Lideres Datio - Acuerdos EdP.xlsx',
+        sheet_name=os.environ["Q"],
+        dtype='object'
+    ).dropna(subset='Dom')
+    for index, data in lideres_df.iterrows():
+        if type(data['Tablero']) == str and team_backlog in data['Tablero']:
+            if type(data['SM']) == str:
+                sm_list = [
+                    transform_assigned(x) for x in transform_replace(data['SM'].replace(',', ' '))]
+                if type(data['SM Temporal']) == str:
+                    sm_list.extend(
+                        [transform_assigned(x) for x in transform_replace(data['SM Temporal'].replace(',', ' '))])
+                return list(set(sm_list))
             break
     return
 
@@ -143,7 +161,7 @@ def get_user_approved(driver, t=1):
                 user_reviewers[usuario] = True
             else:
                 user_reviewers[usuario] = False
-        return [clave for clave, valor in user_reviewers.items() if valor]
+        return [transform_assigned(clave) for clave, valor in user_reviewers.items() if valor]
     else:
         return
 
@@ -159,7 +177,7 @@ def get_files(driver, t=1):
     file_link = []
     for file in file_list:
         name = file.text
-        for i in ['.conf', '.json', '.schema', '.feature', '.scala']:
+        for i in ['.conf', '.json']:
             if i in name:
                 file.click()
                 file_segment = get_value(driver, FileSegmentXpath)
@@ -177,6 +195,10 @@ def transform_assigned(assigned):
     assignee_text = assigned.split('.')
     assignee = assignee_text[:-1] if assignee_text[-1] == 'contractor' else assignee_text
     return ' '.join(assignee).upper()
+
+
+def transform_replace(data):
+    return data.replace('@bbva.com', '').split('\n')
 
 
 # Funciones de Validación:
@@ -381,21 +403,22 @@ def valid_dependency(child_item: list, feature_link: list, status):
     comentario = "No se encontró Dependencia asignada"
     if child_item is not None:
         for child in child_item:
-            if child[3] == status:
-                estado = "OK"
-                comentario = f'HUT asignada a Dependencia {child[0]} y estado {child[3]}'
-            else:
-                estado = "FAILURE"
-                comentario = f'HUT asignada a Dependencia {child[0]} y estado {child[3]} se esperaba {status}'
-            print(f'* {comentario}: {estado}')
-            if feature_link is not None:
-                if child[4] == feature_link:
+            if child[5] == 'Dependency':
+                if child[3] == status:
                     estado = "OK"
-                    comentario = f'Feature Link de HUT y Dependencia {child[0]} son iguales'
+                    comentario = f'HUT asignada a Dependencia {child[0]} y estado {child[3]}'
                 else:
                     estado = "FAILURE"
-                    comentario = f'Feature Link de HUT y Dependencia {child[0]} no son iguales'
+                    comentario = f'HUT asignada a Dependencia {child[0]} y estado {child[3]} se esperaba {status}'
                 print(f'* {comentario}: {estado}')
+                if feature_link is not None:
+                    if child[4] == feature_link:
+                        estado = "OK"
+                        comentario = f'Feature Link de HUT y Dependencia {child[0]} son iguales'
+                    else:
+                        estado = "FAILURE"
+                        comentario = f'Feature Link de HUT y Dependencia {child[0]} no son iguales'
+                    print(f'* {comentario}: {estado}')
     else:
         print(f'* {comentario}: {estado}')
 
@@ -415,24 +438,58 @@ def valid_build_passed(pull_request, latest_build_status):
         print(f'* {comentario}: {estado}')
 
 
-def set_variables(file):
-    list_var = list(set(re.findall(r"(?<=\$\{)[?A-Z0-9_]+(?=})", file)))
-    for var in list_var:
-        if '?' in var:
-            var = var.replace('?', '')
-            os.environ[var] = '"${?'+var+'}"'
+def valid_bot_datio(user_approved, pr_link):
+    estado = "FAILURE"
+    comentario = f'No se encontró aprobación de Bot Datio'
+    if user_approved is not None and "https://globaldevtools.bbva.com/bitbucket/projects/VBSUU" in pr_link:
+        if "BOT-DATIO-BITBUCKET" in user_approved:
+            estado = "OK"
+            comentario = f'Aprobación de Bot Datio'
+    print(f'* {comentario}: {estado}')
+
+
+def valid_sm_approved(user_approved, sm_list):
+    estado = "FAILURE"
+    comentario = f'No se encontró aprobación del SM'
+    if user_approved is not None:
+        if sm_list is not None:
+            find = False
+            for sm in sm_list:
+                for user in user_approved:
+                    if contains_name(sm.lower().split(' '), user.lower().split(' ')):
+                        comentario = f'Aprobación de SM'
+                        estado = "OK"
+                        find = True
+                        break
+            if not find:
+                comentario = f'No se encontró aprobación del SM {sm_list}'
+                estado = "FAILURE"
         else:
-            os.environ[var] = '"${'+var+'}"'
+            comentario = 'No se encontró SM para el Team Backlog de creación revisar "Lideres Datio"'
+            estado = "WARNING"
+    print(f'* {comentario}: {estado}')
 
 
 def valid_conf_hammurabi(files):
     if files is not None:
         for key, value in files.items():
             if ".conf" in key:
-                set_variables(value)
-                conf = ConfigFactory.parse_string(value)
-                # value = conf.get_string("data")
-                print(conf)
+                file_conf = HammurabiConf(key, value)
+                print(file_conf)
+                del file_conf
+            elif ".json":
+                pass
+
+
+def valid_conf_kirby(files):
+    if files is not None:
+        for key, value in files.items():
+            if ".conf" in key:
+                file_conf = KirbyConf(key, value)
+                file_conf.valid_conf()
+                del file_conf
+            elif ".json":
+                pass
 
 
 def ingesta(clase):
@@ -450,6 +507,9 @@ def ingesta(clase):
     valid_pull_request(clase.PullRequest)
     valid_dependency(clase.ChildItem, clase.FeatureLink, "IN PROGRESS")
     valid_build_passed(clase.PullRequest, clase.LatestBuildStatus)
+    valid_bot_datio(clase.UserApproved, clase.PRLink)
+    valid_sm_approved(clase.UserApproved, clase.SM)
+    valid_conf_kirby(clase.Files)
 
 
 def hammurabi(clase):
@@ -467,6 +527,8 @@ def hammurabi(clase):
     valid_pull_request(clase.PullRequest)
     valid_dependency(clase.ChildItem, clase.FeatureLink, "IN PROGRESS")
     valid_build_passed(clase.PullRequest, clase.LatestBuildStatus)
+    valid_bot_datio(clase.UserApproved, clase.PRLink)
+    valid_sm_approved(clase.UserApproved, clase.SM)
     valid_conf_hammurabi(clase.Files)
 
 
@@ -484,6 +546,7 @@ def procesamiento(clase):
     valid_pull_request(clase.PullRequest)
     valid_dependency(clase.ChildItem, clase.FeatureLink, "IN PROGRESS")
     valid_build_passed(clase.PullRequest, clase.LatestBuildStatus)
+    valid_sm_approved(clase.UserApproved, clase.SM)
 
 
 def malla(clase):
@@ -493,10 +556,11 @@ def malla(clase):
     valid_item_type(clase.ItemType, "Technical")
     valid_tech_stack(clase.TechStack, "Data - Dataproc")
     valid_sub_tasks(clase.SubTask, "[C204][PO]", "ACCEPTED", "asignado a PO", clase.PO)
-    valid_sub_tasks(clase.SubTask, "[P110][AT]", "ACCEPTED", "asignado a SM", [""])  # Falta implementar verificación SM
+    valid_sub_tasks(clase.SubTask, "[P110][AT]", "ACCEPTED", "asignado a SM", clase.SM)
     valid_sub_tasks(clase.SubTask, "[C204][QA]", "READY", "sin asignar", ["Unassigned"])
     valid_pull_request(clase.PullRequest)
     valid_dependency(clase.ChildItem, clase.FeatureLink, "IN PROGRESS")
+    valid_sm_approved(clase.UserApproved, clase.SM)
 
 
 def validador(clase):

@@ -1,5 +1,5 @@
-from Code.Clases import *
-from Code.Funciones import validador
+from Code.Clases import ValidHut
+from Code.Funciones import init_driver, validador
 import time
 
 driver = init_driver()
